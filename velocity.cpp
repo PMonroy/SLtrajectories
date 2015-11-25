@@ -156,9 +156,11 @@ void FreeMemoryVelocityGrid()
        delete[] bathymetry[i];
        delete[] land_mask[i];
     }
+  delete[] bathymetry;
+  delete[] land_mask;
 }
 
-int LoadVelocities(date start_date, int tau, char velocitydir[])
+int LoadVelocities(date seed_date, int tau, char velocitydir[])
 {
 
   int t,i,j,k;
@@ -170,7 +172,7 @@ int LoadVelocities(date start_date, int tau, char velocitydir[])
   NcError err(NcError::verbose_nonfatal);
 
   // Open the first Netcdf file
-  sprintf(ncfile, "%sextract_roms_avg_Y%1uM%1u.nc.1",velocitydir, start_date.year,start_date.month);
+  sprintf(ncfile, "%sextract_roms_avg_Y%1uM%1u.nc.1",velocitydir, seed_date.year,seed_date.month);
   cout << "Reading first netcdf file: " << ncfile;
   
   NcFile dataFile(ncfile, NcFile::ReadOnly);  
@@ -202,10 +204,12 @@ int LoadVelocities(date start_date, int tau, char velocitydir[])
 
   double *h, *u, *v, *w;
 
-  h = new double [(tau+2)*nlon*nlat*ndepth];
-  u = new double [(tau+2)*nlonu*nlat*ndepth];
-  v = new double [(tau+2)*nlon*nlatv*ndepth];
-  w = new double [(tau+2)*nlon*nlat*ndepth];
+  int ntau = abs(tau)+3;// this 3 is for integration the v equation 3, else if we dont need to integrate v3 it will be 2; 
+
+  h = new double [ntau*nlon*nlat*ndepth];
+  u = new double [ntau*nlonu*nlat*ndepth];
+  v = new double [ntau*nlon*nlatv*ndepth];
+  w = new double [ntau*nlon*nlat*ndepth];
 
   int npoints_center,npoints_layer_center;
   int npoints_u,npoints_layer_u;
@@ -225,8 +229,17 @@ int LoadVelocities(date start_date, int tau, char velocitydir[])
   date tdate;
   unsigned int count, sum_count;
   
-  start_time = DATE_TO_TIME(start_date);
-  final_time = start_time + tau  + 2;
+  if(tau>0)
+    {
+      start_time = DATE_TO_TIME(seed_date);
+      final_time =  start_time + tau + 3;
+    }
+  else
+    {
+      final_time = DATE_TO_TIME(seed_date);
+      final_time += 3;
+      start_time = final_time + tau - 3;
+    }
 
   time = start_time;
   sum_count = 0;
@@ -292,10 +305,10 @@ int LoadVelocities(date start_date, int tau, char velocitydir[])
 
   // Dynamically allocate velocity fields
 
-  vgrid_depth = new double ***[tau+2];
-  vfield = new vectorXYZ ***[tau+2];
+  vgrid_depth = new double ***[ntau];
+  vfield = new vectorXYZ ***[ntau];
 
-   for (t = 0; t < (tau+2); t++)
+  for (t = 0; t < ntau; t++)
     {
       vgrid_depth[t] = new double **[nlon];
       vfield[t] = new vectorXYZ **[nlon];
@@ -310,12 +323,10 @@ int LoadVelocities(date start_date, int tau, char velocitydir[])
 	    }
 	}
     }
- 
 
+  //#pragma omp parallel for default(shared) private(i,j,k)
 
-#pragma omp parallel for default(shared) private(i,j,k)
-
-  for(t = 0; t < tau+2; t++)
+   for(t = 0; t < ntau; t++)
     {      
       for(i = 0; i < nlon; i++)
 	{
@@ -345,9 +356,9 @@ int LoadVelocities(date start_date, int tau, char velocitydir[])
 
 void FreeMemoryVelocities(int tau) 
 {
-  
   int t,i,j;
-   for(t = 0; t < tau+2; t++)
+  int ntau = abs(tau)+3;
+  for(t = 0; t < ntau; t++)
     {
       for(i = 0; i < nlon; i++)
 	{
@@ -356,8 +367,15 @@ void FreeMemoryVelocities(int tau)
 	      delete[] vgrid_depth[t][i][j];
 	      delete[] vfield[t][i][j];
 	    }
+	  delete[] vgrid_depth[t][i];
+	  delete[] vfield[t][i]; 
 	}
+      delete[] vgrid_depth[t];
+      delete[] vfield[t]; 
     }
+
+  delete[] vgrid_depth;
+  delete[] vfield;   
 }
 
 void locate(double xx[], unsigned long n, double x, unsigned long *j)

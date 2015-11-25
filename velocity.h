@@ -14,7 +14,7 @@ struct  vectorIJK {
 /* FUNCTIONS */
 int LoadVelocityGrid(date reference_date, char velocitydir[]);
 void FreeMemoryVelocityGrid();
-int LoadVelocities(date start_date, int tau, char velocitydir[]);// This function read the 2D velocity field since start_date to start_date+tau in a constant depth (layer_index)
+int LoadVelocities(date seed_date, int tau, char velocitydir[]);// This function read the 2D velocity field since start_date to start_date+tau in a constant depth (layer_index)
 void FreeMemoryVelocities(int tau);
 
 int GetLonIndex(double latitude);

@@ -142,11 +142,12 @@ int main(int argc, char **argv)
       return 1;
     }
 
-  if(LoadVelocities(startdate, (int) tau+1, velocitydir)!=0)
+  if(LoadVelocities(startdate, (int) (tau), velocitydir)!=0)
     {
       cout << "Error in reading velocities"<< endl;
       return 1;
     }
+  cout << "Reading vflow"<< endl;
 
   int indexextension = fnameitracers.find_last_of("."); 
   int indexpath = fnameitracers.find_last_of("/")+1; 
@@ -156,7 +157,7 @@ int main(int argc, char **argv)
 
   unsigned int ntau;
 
-  ntau = ((unsigned int)(tau/intstep)+1);
+  ntau = ((unsigned int)(abs(tau)/intstep)+1);
 
   tracer = new vectorXYZ *[itracer.size()];
   for (unsigned int i = 0; i < itracer.size(); i++)
@@ -175,11 +176,36 @@ int main(int argc, char **argv)
    string nameotracers;  
    ofstream fileotracers;
 
-   for(double t=0.0; t<=tau-intstep; t+=intstep)
+   double tstart;
+   double tend;
+   double h;
+
+   int ascnd;
+
+
+   ascnd = tau > 0;
+
+   if(ascnd)
+    {
+      tstart = 0.0;
+      tend = tau-intstep;
+      h=intstep;
+    }
+  else
+    {
+      tend = 0.0+intstep;
+      tstart = abs(tau);
+      h=-1.0*intstep;
+    }
+
+   cout << "starting loop="<<tstart<<":"<<tend<<":"<<h <<endl;
+   cout << "ntau="<<ntau <<endl;
+   double t;
+   int count;
+
+   for(t=tstart,count=0; ((t<tend)==ascnd) || (t==tend); t+=h,count++)
      {
-       
-       j = ((unsigned int)(t/intstep)+1);
-       
+       cout << t+h << " "<< count+1 <<endl;
        nameotracers = wdir + rawfnameitracers + 
 	 "_t"+ DoubletoString(2, 0, startdate.day) + 
 	 DoubletoString(2, 0, startdate.month) + 
@@ -188,28 +214,29 @@ int main(int argc, char **argv)
 	 DoubletoString(3, 2, intstep) + 
 	 "_v"+ DoubletoString(3, 0,vsink) +
 	 "_e"+ DoubletoString(1, 0,eqvelocity) + 
-	 "-"+ DoubletoString(5, 2, t+intstep) + 
+	 "-"+ DoubletoString(5, 2, t+h) + 
 	 ".trac";
        fileotracers.open(nameotracers.c_str());	
 
        for (unsigned int i = 0; i <itracer.size() ; i++)
 	 {
-	   tracer[i][j] = tracer[i][j-1];
+	   tracer[i][count+1] = tracer[i][count];
 	   // Semi-implicit 4th order Runge-Kutta
 	   if(outsider[i]==0)
-	     outsider[i]=RK4(t, intstep, &tracer[i][j], velocity);
+	     outsider[i]=RK4(t, h, &tracer[i][count+1], velocity);
 
-	   fileotracers << tracer[i][j] << endl;
+	   fileotracers << tracer[i][count+1] << endl;
 	 }
        fileotracers.close();
      }
-  
+
+   //#if 0
    /****************************************************************************************************
     * STATISTICS
     ****************************************************************************************************/
 
    vectorXYZ delta;
-   vectorXYZ h;
+   vectorXYZ scalefactor;
    vectorXYZ sumdelta,sum2delta;
    vectorXYZ meandisplacement,meandisplacement2, dispersion;
 
@@ -229,11 +256,8 @@ int main(int argc, char **argv)
    ofstream fileodispersion(fnameodispersion.c_str());
 
    int ninsiders;
-
-   for(double t=0.0; t<=tau-intstep; t+=intstep)
+   for(t=tstart,j=0; ((t<tend)==ascnd) || (t==tend); t+=h,j++)
      {       
-       j = (unsigned int)(t/intstep);
-       
        sumdelta.x = 0.0;
        sumdelta.y = 0.0;
        sumdelta.z = 0.0; 
@@ -254,11 +278,11 @@ int main(int argc, char **argv)
 	       delta.x = rads * delta.x;
 	       delta.y = rads * delta.y;
 	       	       
-	       h.x = rearth*cos(rads*tracer[i][0].y);
-	       h.y = rearth;
-	       h.z = 1.0;
+	       scalefactor.x = rearth*cos(rads*tracer[i][0].y);
+	       scalefactor.y = rearth;
+	       scalefactor.z = 1.0;
 
-	       delta = h*delta;
+	       delta = scalefactor*delta;
 	       sumdelta += delta;
 
 	       delta *=delta;
@@ -302,12 +326,12 @@ int main(int argc, char **argv)
    vtktracers << "yeah!!!!!!!!!!!!!!!!!!!!!!" <<endl;
    vtktracers << "ASCII" <<endl;
    vtktracers << "DATASET POLYDATA" <<endl;
-   vtktracers << "POINTS "<< itracer.size()*((int)(tau/intstep)+1) <<" float"<<endl;
+   vtktracers << "POINTS "<< itracer.size()*((int)(abs(tau)/intstep)+1) <<" float"<<endl;
    for (unsigned int i = 0; i <itracer.size() ; i++)
 	 {
 	   vtktracers << tracer[i][0].x <<" "<< tracer[i][0].y<<" "<< tracer[i][0].z*0.001 <<endl;
 	 }
-   for(double t=0.0; t<=tau-intstep; t+=intstep)
+   for(double t=tstart; t<=tend; t+=h) 
      {
 
        j = ((unsigned int)(t/intstep)+1);
@@ -322,8 +346,8 @@ int main(int argc, char **argv)
    vtktracers << "LINES "<< itracer.size() <<" "<< (itracer.size())*((int)(tau/intstep) + 2) <<endl;
    for(unsigned int i=0; i< itracer.size(); i++)
      {
-       vtktracers << ((int)(tau/intstep) + 1) <<" ";
-       for(unsigned int j=0; j<itracer.size()*((int)(tau/intstep)+1) ; j+=itracer.size())
+       vtktracers << ((int)(abs(tau)/intstep) + 1) <<" ";
+       for(unsigned int j=0; j<itracer.size()*((int)(abs(tau)/intstep)+1) ; j+=itracer.size())
 	 { 
 	   vtktracers << i+j <<" ";
 	 }
@@ -337,10 +361,10 @@ int main(int argc, char **argv)
      {
        vtktracers << i<<" ";
      }
-   vtktracers << "POINT_DATA "<< itracer.size()*((int)(tau/intstep)+1) <<endl;
+   vtktracers << "POINT_DATA "<< itracer.size()*((int)(abs(tau)/intstep)+1) <<endl;
    vtktracers <<"SCALARS lines_color float"<<endl;
    vtktracers <<"LOOKUP_TABLE default"<<endl;
-   for(double t=0.0; t<=tau; t+=intstep)
+   for(double t=tstart; t<=tend; t+=h) 
      {
        for(unsigned int i=0; i< itracer.size(); i++)
 	 {
@@ -348,16 +372,17 @@ int main(int argc, char **argv)
 	 }
      }
    vtktracers.close();
-   
+
+   //#endif   
    FreeMemoryVelocityGrid();
-   FreeMemoryVelocities(tau);
+   FreeMemoryVelocities((int) (tau));
 
 
-   
+  cout << "free vectors "<<endl;   
   for (unsigned int i = 0; i < itracer.size(); i++)
     {
        delete[] tracer[i];
     }
-
+  delete[] tracer;
   return 0;
 }
