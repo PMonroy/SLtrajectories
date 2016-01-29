@@ -27,6 +27,12 @@ vectorXYZ ****vfield;
 int **land_mask;
 double **bathymetry;
 
+// DEBUG
+
+int nfail_int;
+int n_int;
+
+
 int LoadVelocityGrid(date rdate, char velocitydir[])
 {
   int i,j,q; // loop indices
@@ -351,6 +357,9 @@ int LoadVelocities(date seed_date, int tau, char velocitydir[])
   delete[] v;
   delete[] w;
 
+  n_int = 0;
+  nfail_int=0;
+
   return 0;
 }
 
@@ -373,6 +382,9 @@ void FreeMemoryVelocities(int tau)
       delete[] vgrid_depth[t];
       delete[] vfield[t]; 
     }
+
+  cout << "n_int: "<< n_int<<endl;
+  cout << "nfail_int: "<< nfail_int<<endl;
 
   delete[] vgrid_depth;
   delete[] vfield;   
@@ -474,6 +486,12 @@ int GetIndices(unsigned long time, vectorXYZ point, vectorIJK *index)
 	  else
 	    index->k[i][j] = index_depth - 1;
 	}
+    }
+
+  n_int++;
+  if( (index->k[0][0]!=index->k[0][1]) || (index->k[0][0]!=index->k[1][0]) || (index->k[0][0]!=index->k[1][1]) )
+    {
+      nfail_int++;
     }
   return 0;
 }

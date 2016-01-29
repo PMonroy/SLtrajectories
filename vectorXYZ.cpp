@@ -98,6 +98,14 @@ ostream &operator<<(ostream &out, vectorXYZ a)     //output
         return out;
 }
 
+istream &operator>>(istream &in, vectorXYZ &a)     //input
+{
+  in>>a.x;
+  in>>a.y;
+  in>>a.z;  
+  return in;
+}
+
 bool operator==(vectorXYZ a,vectorXYZ b)
 {
   return (a.x==b.x && a.y==b.y && a.z==b.z);

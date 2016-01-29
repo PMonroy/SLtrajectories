@@ -2,6 +2,7 @@
 #include <iostream>
 #include <iomanip>  
 #include <fstream>
+#include <sstream>
 #include <unistd.h>
 #include <cstdio>
 #include <cstdlib>
@@ -14,87 +15,177 @@ using namespace std;
 #include "ioutil.h"
 #include "constants.h"
 #include "lagrangian_engine.h"
-
+#include "optionparser.h"
 double vsink;
 
-int main(int argc, char **argv)
+
+struct Arg: public option::Arg
+{
+  static void printError(const char* msg1, const option::Option& opt, const char* msg2)
+  {
+    fprintf(stderr, "%s", msg1);
+    fwrite(opt.name, opt.namelen, 1, stderr);
+    fprintf(stderr, "%s", msg2);
+  }
+
+  static option::ArgStatus Unknown(const option::Option& option, bool msg)
+  {
+    if (msg) printError("Unknown option '", option, "'\n");
+    return option::ARG_ILLEGAL;
+  }
+
+  static option::ArgStatus Required(const option::Option& option, bool msg)
+  {
+    if (option.arg != 0)
+      return option::ARG_OK;
+
+    if (msg) printError("Option '", option, "' requires an argument\n");
+    return option::ARG_ILLEGAL;
+  }
+
+  static option::ArgStatus NonEmpty(const option::Option& option, bool msg)
+  {
+    if (option.arg != 0 && option.arg[0] != 0)
+      return option::ARG_OK;
+
+    if (msg) printError("Option '", option, "' requires a non-empty argument\n");
+    return option::ARG_ILLEGAL;
+  }
+
+  static option::ArgStatus Numeric(const option::Option& option, bool msg)
+  {
+    char* endptr = 0;
+    if (option.arg != 0 && strtol(option.arg, &endptr, 10)){};
+    if (endptr != option.arg && *endptr == 0)
+      return option::ARG_OK;
+
+    if (msg) printError("Option '", option, "' requires a numeric argument\n");
+    return option::ARG_ILLEGAL;
+  }
+};
+
+
+enum optionIndex { UNKNOWN, HELP, INPUTFILE, TIMEPARAMS, VEQUATION, SVELOCITY, RANDOM};
+enum optionType {OPTIONAL, REQUIRED};
+const option::Descriptor usage[] = 
+{
+  {UNKNOWN, OPTIONAL,"", "",       Arg::Unknown, "USAGE: ./sltraj [options]\n\n"
+                                          "Options:" },
+  {HELP,    OPTIONAL,"h", "h",  Arg::None,      "  -h \t \t Print usage and exit." },
+  {INPUTFILE,REQUIRED,"f","f",  Arg::Required,   "  -f <arg>,\t \t Input file." },
+  {TIMEPARAMS,REQUIRED,"t","t", Arg::Required, "  -t <arg=dd/mm/yyyy:tau:intstep>,\t\t Time parameters. " },
+  {VEQUATION,REQUIRED,"e","e", Arg::Required, "  -e <arg>,\t \t Velocity equation." },
+  {SVELOCITY, REQUIRED,"s","s", Arg::Required,"  -s <arg>,\t \t Requires a number as argument." },
+  {RANDOM,OPTIONAL,"r","r", Arg::None,        "  -r, \t \t Enable random displacement equation." },
+  { UNKNOWN, OPTIONAL,"", "", Arg::None, "\nExamples:\n"
+  " ./sltraj -t =01/02/1989:10:0.01 -f yeah.dat -s 12 -e 0 \n" 
+  " ./sltraj -t =01/02/1989:10:0.01 -f yeah.dat -s 12 -e 0 -r \n" 
+  },
+  { 0, 0, 0, 0, 0, 0} 
+};
+
+
+
+int main(int argc, char* argv[])
 {
 
   /**********************************************
    * READ COMAND LINE PARAMETERS
    **********************************************/
-  int opt;
-  int optflag=0;
 
   string fnameitracers;
-  ifstream fileitracers;
   date startdate;
   double tau;
   double intstep;
   int eqvelocity;
+  int random=0;
+  int verbose=0;
+  /* Default parameters */
+  string wdir="/home/pmonroy/ESCOLA/RUNS/SLtrajectories/";
 
+  /* VELOCITY FLOW PARAMS */
   char velocitydir[] = "/scratch/pmonroy/";
   //char velocitydir[] = "/data/geo/escola/roms_benguela/";
-
-  string wdir="/home/pmonroy/ESCOLA/RUNS/SLtrajectory/";
-
   date reference_date = {8,  //year
 			 1,  //month
 			 1,  //day
   };
-
   int (*velocity)(double ,vectorXYZ , vectorXYZ* );
  
+  argc-=(argc>0); argv+=(argc>0); // skip program name argv[0] if present
+  option::Stats  stats(usage, argc, argv);
+  vector<option::Option> options(stats.options_max);
+  vector<option::Option> buffer(stats.buffer_max);
+  option::Parser parse(usage, argc, argv, &options[0], &buffer[0]); // Parsing options
 
-  while ((opt = getopt(argc, (char **)argv, "f:t:v:e:")) != -1) 
+  /**************************************************************
+   * CHECK COMAND LINE OPTIONS
+   *************************************************************/
+  if (parse.error())// Error parsing
+    return 1;
+
+  if (options[HELP] || argc == 0) // Help options or no options given
     {
-      cout << "Option: " << (char)opt;
-      switch(opt)
+      option::printUsage(std::cout, usage);
+      return 0;
+    }
+
+  for(unsigned int i=0; i<stats.options_max; i++)
+    {
+      if(options[i].type()!=usage[i].type)// Options that are required 
 	{
-	case 'f':
-	  optflag++;
-	  fnameitracers=optarg;
-	  fileitracers.open(fnameitracers.c_str());
-	  if (optarg)
-	    cout << ", argument: " << optarg;
-	  else
-	    cout << ",no argument! ";
-	  cout << '\n';
-	  break;
-	case 't':
-	  optflag++;
-	  if(sscanf(optarg,"%u-%u-%u:%lf:%lf",&startdate.day,&startdate.month,&startdate.year,&tau,&intstep)!=5)
-	    {
-	      cout << ": Date format in startdate is incorrect" << endl;
-	      return 1;
-	    }
-	  else
-	    cout << ", arguments: " <<startdate.day<<" "<<startdate.month<<" "<<startdate.year <<endl;
-	  break;
-	case 'v':
-	  optflag++;
-	  vsink=atof(optarg); 
-	  if (optarg)
-	    cout << ", argument: " << vsink;
-	  else
-	    cout << ",no argument! ";
-	  cout << '\n';
-	  break;
-	case 'e':
-	  optflag++;
-	  eqvelocity=atoi(optarg); 
-	  if (optarg)
-	    cout << ", argument: " << eqvelocity;
-	  else
-	    cout << ",no argument! ";
-	  cout << '\n';
-	  break;
-	case '?':
-	  cout << "Unknown option "<<endl ;
+	  if(options[i].count()==0)
+	    cout<<"Option '"<< usage[i].shortopt << "' is required."<<endl;
+	  return 0;
+	}
+      if(options[i].count()>1) // Repeated options are not permited
+	{
+	  cout<<"Option '"<< usage[i].shortopt << "' is repeated."<<endl;
+	  return 0;
 	}
     }
 
-  cout << "number of options =" << optflag<<endl;
+
+  /**************************************************************
+   * PARSING ARGUMENTS
+   *************************************************************/ 
+
+  if (options[INPUTFILE])
+    fnameitracers = options[INPUTFILE].arg;
+
+  if (options[TIMEPARAMS])
+    {
+     stringstream ss(options[TIMEPARAMS].arg); 
+     if (ss.peek() == '=')
+       ss.ignore();
+
+     ss >> startdate.day;
+     
+     if (ss.peek() == '/')
+       ss.ignore();
+     
+     ss >> startdate.month;
+     
+     if (ss.peek() == '/')
+       ss.ignore();
+     
+     ss >> startdate.year;
+
+    if (ss.peek() == ':')
+       ss.ignore();
+     
+    ss >> tau;
+
+    if (ss.peek() == ':')
+       ss.ignore();
+     
+    ss >> intstep;
+    }
+  if (options[VEQUATION])
+    {
+      stringstream ss(options[VEQUATION].arg); 
+      ss >> eqvelocity;
+    }
   
   switch(eqvelocity)
     {
@@ -113,15 +204,41 @@ int main(int argc, char **argv)
     case 4:
       velocity = vfullinertia;
       break;
+    default:
+      cout<<"Invalid argument of vequation"<<endl;
+      return 0;
+    }
+  
+  if (options[SVELOCITY])
+    {
+      stringstream ss(options[SVELOCITY].arg); 
+      ss >> vsink;
     }
 
+  
+  if (options[RANDOM])
+     random = 1;
+
+  /* VERBOSE OPTIONS */
+
+  cout << "stardate: " <<startdate.day<<" "<<startdate.month<<" "<<startdate.year <<endl;
+  cout << "tau: " << tau <<endl;
+  cout << "intstep: " << intstep <<endl;
+  if (random)
+    cout << "random: enabled "<<endl; 
+  else
+    cout << "random: disabled"<<endl;
+  cout << "vsink: " << vsink <<endl;
+  cout << "vequation: " << eqvelocity <<endl;
+
+  
   /**********************************************
    * READ TRACER INITIAL POSTIONS 
    **********************************************/
   double x, y, z;
   vector<vectorXYZ> itracer;
   unsigned int numtracers;
-
+  ifstream fileitracers(fnameitracers.c_str());  
   while( fileitracers >> x >> y >> z )
     {
       itracer.push_back(vectorXYZ(x,y,z));
@@ -176,6 +293,12 @@ int main(int argc, char **argv)
    string nameotracers;  
    ofstream fileotracers;
 
+   string nameotracersvtk;  
+   ofstream fileotracersvtk;
+
+   string nameoutsider;  
+   ofstream fileoutsider;
+
    double tstart;
    double tend;
    double h;
@@ -198,43 +321,144 @@ int main(int argc, char **argv)
       h=-1.0*intstep;
     }
 
-   cout << "starting loop="<<tstart<<":"<<tend<<":"<<h <<endl;
-   cout << "ntau="<<ntau <<endl;
    double t;
    int count;
-
-   for(t=tstart,count=0; ((t<tend)==ascnd) || (t==tend); t+=h,count++)
+   if(random==0)
      {
-       cout << t+h << " "<< count+1 <<endl;
-       nameotracers = wdir + rawfnameitracers + 
-	 "_t"+ DoubletoString(2, 0, startdate.day) + 
-	 DoubletoString(2, 0, startdate.month) + 
-	 DoubletoString(4, 0, startdate.year) +
-	 DoubletoString(3, 0, tau) + 
-	 DoubletoString(3, 2, intstep) + 
-	 "_v"+ DoubletoString(3, 0,vsink) +
-	 "_e"+ DoubletoString(1, 0,eqvelocity) + 
-	 "-"+ DoubletoString(5, 2, t+h) + 
-	 ".trac";
-       fileotracers.open(nameotracers.c_str());	
-
-       for (unsigned int i = 0; i <itracer.size() ; i++)
+       for(t=tstart,count=0; ((t<tend)==ascnd) || (t==tend); t+=h,count++)
 	 {
-	   tracer[i][count+1] = tracer[i][count];
-	   // Semi-implicit 4th order Runge-Kutta
-	   if(outsider[i]==0)
-	     outsider[i]=RK4(t, h, &tracer[i][count+1], velocity);
+	   cout << t+h << " "<< count+1 <<endl;
+	   nameotracers = wdir + rawfnameitracers + 
+	     "_t"+ DoubletoString(2, 0, startdate.day) + 
+	     DoubletoString(2, 0, startdate.month) + 
+	     DoubletoString(4, 0, startdate.year) +
+	     DoubletoString(3, 0, tau) + 
+	     DoubletoString(3, 2, intstep) + 
+	     "_v"+ DoubletoString(3, 0,vsink) +
+	     "_e"+ DoubletoString(1, 0,eqvelocity) +
+	     "_r"+ DoubletoString(1, 0,random) + 
+	     "-"+ DoubletoString(5, 2, t+h) + 
+	     ".trac";
+	   fileotracers.open(nameotracers.c_str());
+	
+	   nameotracersvtk = wdir + rawfnameitracers + "_xyzpos" +
+	     "_t"+ DoubletoString(2, 0, startdate.day) + 
+	     DoubletoString(2, 0, startdate.month) + 
+	     DoubletoString(4, 0, startdate.year) +
+	     DoubletoString(3, 0, tau) + 
+	     DoubletoString(3, 2, intstep) + 
+	     "_v"+ DoubletoString(3, 0,vsink) +
+	     "_e"+ DoubletoString(1, 0,eqvelocity) + 
+	     "_r"+ DoubletoString(1, 0,random) + 
+	     "-"+ DoubletoString(5, 2, t+h) + 
+	     ".vtk";
+	   fileotracersvtk.open(nameotracersvtk.c_str());
+	   fileotracersvtk << "# vtk DataFile Version 3.0" << endl;
+	   fileotracersvtk <<  "vtk output" << endl;
+	   fileotracersvtk <<  "ASCII " << endl;
+	   fileotracersvtk << "DATASET POLYDATA" << endl;
+	   fileotracersvtk << "POINTS "<< itracer.size() <<" float" << endl;
 
-	   fileotracers << tracer[i][count+1] << endl;
+	   for (unsigned int i = 0; i <itracer.size() ; i++)
+	     {
+	       tracer[i][count+1] = tracer[i][count];
+	       // Semi-implicit 4th order Runge-Kutta
+	       if(outsider[i]==0)
+		 outsider[i]=RK4(t, h, &tracer[i][count+1], velocity);
+	       
+	       fileotracers << setprecision(20) << tracer[i][count+1] << endl;
+	       fileotracersvtk << tracer[i][count+1].x<<" "<<tracer[i][count+1].y<<" "<<tracer[i][count+1].z*0.001 << endl;
+	     }
+	   fileotracersvtk << "VERTICES "<< itracer.size() <<" " << 2*itracer.size() << endl;
+	   for(unsigned int i = 0; i<itracer.size(); i++ )
+	     {
+	       fileotracersvtk  << "1" << " " << i << endl;
+	     }
+	   fileotracers.close();
+	   fileotracersvtk.close();
 	 }
-       fileotracers.close();
      }
+   else
+     {
+       for(t=tstart,count=0; ((t<tend)==ascnd) || (t==tend); t+=h,count++)
+	 {
+	   cout << t+h << " "<< count+1 <<endl;
+	   nameotracers = wdir + rawfnameitracers + 
+	     "_t"+ DoubletoString(2, 0, startdate.day) + 
+	     DoubletoString(2, 0, startdate.month) + 
+	     DoubletoString(4, 0, startdate.year) +
+	     DoubletoString(3, 0, tau) + 
+	     DoubletoString(3, 2, intstep) + 
+	     "_v"+ DoubletoString(3, 0,vsink) +
+	     "_e"+ DoubletoString(1, 0,eqvelocity) + 
+	     "_r"+ DoubletoString(1, 0,random) + 
+	     "-"+ DoubletoString(5, 2, t+h) + 
+	     ".trac";
+	   fileotracers.open(nameotracers.c_str());	
 
-   //#if 0
+	   nameotracersvtk = wdir + rawfnameitracers + "_xyzpos" +
+	     "_t"+ DoubletoString(2, 0, startdate.day) + 
+	     DoubletoString(2, 0, startdate.month) + 
+	     DoubletoString(4, 0, startdate.year) +
+	     DoubletoString(3, 0, tau) + 
+	     DoubletoString(3, 2, intstep) + 
+	     "_v"+ DoubletoString(3, 0,vsink) +
+	     "_e"+ DoubletoString(1, 0,eqvelocity) +
+	     "_r"+ DoubletoString(1, 0,random) +  
+	     "-"+ DoubletoString(5, 2, t+h) + 
+	     ".vtk";
+	   fileotracersvtk.open(nameotracersvtk.c_str());
+	   fileotracersvtk << "# vtk DataFile Version 3.0" << endl;
+	   fileotracersvtk <<  "vtk output" << endl;
+	   fileotracersvtk <<  "ASCII " << endl;
+	   fileotracersvtk << "DATASET POLYDATA" << endl;
+	   fileotracersvtk << "POINTS "<< itracer.size() <<" float" << endl;
+
+	   for (unsigned int i = 0; i <itracer.size() ; i++)
+	     {
+	       tracer[i][count+1] = tracer[i][count];
+	       // 2th order Heun 
+	       if(outsider[i]==0)
+		 outsider[i]=heun(t, h, &tracer[i][count+1], velocity, *stddev_consteddydiff);
+	       else
+		 randomtrial();
+
+	       fileotracers << setprecision(20) << tracer[i][count+1] << endl;
+	       fileotracersvtk << tracer[i][count+1].x<<" "<<tracer[i][count+1].y<<" "<<tracer[i][count+1].z*0.001 << endl;
+	     }
+
+	   fileotracersvtk << "VERTICES "<< itracer.size() <<" " << 2*itracer.size() << endl;
+	   for(unsigned int i = 0; i<itracer.size(); i++ )
+	     {
+	       fileotracersvtk  << "1" << " " << i << endl;
+	     }
+	   fileotracers.close();
+	   fileotracersvtk.close();
+	 }
+     } 
+
+
+       
+   nameoutsider = wdir + rawfnameitracers + 
+     "_t"+ DoubletoString(2, 0, startdate.day) + 
+     DoubletoString(2, 0, startdate.month) + 
+     DoubletoString(4, 0, startdate.year) +
+     DoubletoString(3, 0, tau) + 
+     DoubletoString(3, 2, intstep) + 
+     "_v"+ DoubletoString(3, 0,vsink) +
+	 "_e"+ DoubletoString(1, 0,eqvelocity) +
+     "_r"+ DoubletoString(1, 0,random) +  
+     ".outsider";
+   fileoutsider.open(nameoutsider.c_str());
+   for(unsigned int i = 0; i<itracer.size(); i++ )
+     {
+       fileoutsider  << outsider[i]<< endl;
+     }
+   fileoutsider.close();   
+
    /****************************************************************************************************
     * STATISTICS
     ****************************************************************************************************/
-
    vectorXYZ delta;
    vectorXYZ scalefactor;
    vectorXYZ sumdelta,sum2delta;
@@ -250,6 +474,7 @@ int main(int argc, char **argv)
 	 DoubletoString(3, 2, intstep) + 
 	 "_v"+ DoubletoString(3, 0,vsink) +
 	 "_e"+ DoubletoString(1, 0,eqvelocity) + 
+         "_r"+ DoubletoString(1, 0,random) + 
 	 ".disp";
 
 
@@ -296,29 +521,34 @@ int main(int argc, char **argv)
 
        dispersion = meandisplacement2 - meandisplacement*meandisplacement;
 
-       fileodispersion << t<<" "<<  meandisplacement.x <<" "<< meandisplacement.y <<" " << meandisplacement.z <<" ";
-       fileodispersion << setprecision(16) << sqrt(meandisplacement2.x) <<" "<< sqrt(meandisplacement2.y) <<" " << sqrt(meandisplacement2.z) <<" ";
-       fileodispersion << setprecision(16) << sqrt(meandisplacement2.x+meandisplacement2.y+meandisplacement2.z) <<" ";
-       fileodispersion << setprecision(16) << sqrt(dispersion.x) <<" "<< sqrt(dispersion.y) <<" "<< sqrt(dispersion.z) <<endl;
+       fileodispersion << t << " ";
+       fileodispersion << setprecision(20) << meandisplacement.x <<" "<< meandisplacement.y <<" " << meandisplacement.z <<" ";
+       fileodispersion << setprecision(20) << meandisplacement2.x <<" "<< meandisplacement2.y <<" " << meandisplacement2.z <<" ";
+       fileodispersion << setprecision(20) << sqrt(dispersion.x+dispersion.y) <<" "<< sqrt(dispersion.z) <<endl;
      }
    fileodispersion.close();  
 
+   /* VERBOSE */
+
+   cout << "num. part. insiders = "<< ninsiders <<endl;
+   cout << "num. part. seeding = "<< numtracers <<endl;
 
    /****************************************************************************************************
-    * VTK FILE
+    * VTK FILES
     ****************************************************************************************************/
  
    string namevtktracers;
 
-    namevtktracers = wdir + rawfnameitracers + 
-	 "_t"+ DoubletoString(2, 0, startdate.day) + 
-	 DoubletoString(2, 0, startdate.month) + 
-	 DoubletoString(4, 0, startdate.year) +
-	 DoubletoString(3, 0, tau) + 
-	 DoubletoString(3, 2, intstep) + 
-	 "_v"+ DoubletoString(3, 0,vsink) +
-	 "_e"+ DoubletoString(1, 0,eqvelocity) + 
-	 ".vtk";
+   namevtktracers = wdir + rawfnameitracers + "_path" +
+     "_t"+ DoubletoString(2, 0, startdate.day) + 
+     DoubletoString(2, 0, startdate.month) + 
+     DoubletoString(4, 0, startdate.year) +
+     DoubletoString(3, 0, tau) + 
+     DoubletoString(3, 2, intstep) + 
+     "_v"+ DoubletoString(3, 0,vsink) +
+     "_e"+ DoubletoString(1, 0,eqvelocity) + 
+     "_r"+ DoubletoString(1, 0,random) + 
+     ".vtk";
 
     ofstream vtktracers(namevtktracers.c_str());
 
@@ -326,28 +556,24 @@ int main(int argc, char **argv)
    vtktracers << "yeah!!!!!!!!!!!!!!!!!!!!!!" <<endl;
    vtktracers << "ASCII" <<endl;
    vtktracers << "DATASET POLYDATA" <<endl;
-   vtktracers << "POINTS "<< itracer.size()*((int)(abs(tau)/intstep)+1) <<" float"<<endl;
+   vtktracers << "POINTS "<< itracer.size()*ntau <<" float"<<endl;
    for (unsigned int i = 0; i <itracer.size() ; i++)
 	 {
 	   vtktracers << tracer[i][0].x <<" "<< tracer[i][0].y<<" "<< tracer[i][0].z*0.001 <<endl;
 	 }
-   for(double t=tstart; t<=tend; t+=h) 
+   for(t=tstart,j=0; ((t<tend)==ascnd) || (t==tend); t+=h,j++) 
      {
-
-       j = ((unsigned int)(t/intstep)+1);
-
        for (unsigned int i = 0; i <itracer.size() ; i++)
 	 {
-
-	   vtktracers << tracer[i][j].x <<" "<< tracer[i][j].y<<" "<< tracer[i][j].z*0.001 <<endl;
+	   vtktracers << tracer[i][j+1].x <<" "<< tracer[i][j+1].y<<" "<< tracer[i][j+1].z*0.001 <<endl;
 	 }
      }
 
-   vtktracers << "LINES "<< itracer.size() <<" "<< (itracer.size())*((int)(tau/intstep) + 2) <<endl;
+   vtktracers << "LINES "<< itracer.size() <<" "<< (itracer.size())*(ntau + 1) <<endl;
    for(unsigned int i=0; i< itracer.size(); i++)
      {
-       vtktracers << ((int)(abs(tau)/intstep) + 1) <<" ";
-       for(unsigned int j=0; j<itracer.size()*((int)(abs(tau)/intstep)+1) ; j+=itracer.size())
+       vtktracers << ntau <<" ";
+       for(unsigned int j=0; j<itracer.size()*ntau ; j+=itracer.size())
 	 { 
 	   vtktracers << i+j <<" ";
 	 }
@@ -361,28 +587,35 @@ int main(int argc, char **argv)
      {
        vtktracers << i<<" ";
      }
-   vtktracers << "POINT_DATA "<< itracer.size()*((int)(abs(tau)/intstep)+1) <<endl;
+   vtktracers << "POINT_DATA "<< itracer.size()*ntau <<endl;
    vtktracers <<"SCALARS lines_color float"<<endl;
    vtktracers <<"LOOKUP_TABLE default"<<endl;
-   for(double t=tstart; t<=tend; t+=h) 
+   for(unsigned int i=0; i< itracer.size(); i++)
+	 {
+	   vtktracers << tstart <<" ";
+	 }
+   for(t=tstart; ((t<tend)==ascnd) || (t==tend); t+=h) 
      {
        for(unsigned int i=0; i< itracer.size(); i++)
 	 {
-	   vtktracers << t<<" ";
+	   vtktracers << t+h <<" ";
 	 }
      }
    vtktracers.close();
 
-   //#endif   
+
+   /**************************************
+    * FREE MEMORY 
+    *************************************/
+ 
    FreeMemoryVelocityGrid();
-   FreeMemoryVelocities((int) (tau));
-
-
-  cout << "free vectors "<<endl;   
-  for (unsigned int i = 0; i < itracer.size(); i++)
+   FreeMemoryVelocities((int) (tau));   
+   cout << "free vectors "<<endl;   
+   for (unsigned int i = 0; i < itracer.size(); i++)
     {
-       delete[] tracer[i];
+      delete[] tracer[i];
     }
-  delete[] tracer;
-  return 0;
+   delete[] tracer;
+
+   return 0;
 }

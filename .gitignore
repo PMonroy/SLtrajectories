@@ -3,4 +3,7 @@
 *.o
 sltraj
 *~
+idisp
+idisp.sh
+mkitracer
 

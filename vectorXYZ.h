@@ -29,6 +29,7 @@ class  vectorXYZ
   vectorXYZ operator/( vectorXYZ a);      // Product element by element
 
   friend ostream &operator<<(ostream &out, vectorXYZ a);
+  friend istream &operator>>(istream &in, vectorXYZ &a);
 
   ~vectorXYZ();	                            // Destructor
 };
