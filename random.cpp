@@ -182,14 +182,13 @@ double gasdev(double (*nrand)(void ))
     }
 }
 
-double gasdev2(double (*nrand)(void ))
-{
+double gasdev2(double (*nrand)(void )){
 
   static int iset=0;
   static double gset;
   double v,u;
   
-
+  
   if(iset == 0)
     {
       u=sqrt(-2.0*log(nrand()));
